@@ -49,7 +49,7 @@ class ASKFSVMBinary(BaseEstimator, ClassifierMixin):
 
         # Solve the dual problem and compute 'alphas' and 'new_eigenvalues'
         result, alphas , new_eigenvalues = ASFSolver_original.solve(Kold=K_old, gamma=self.gamma, delta=self.delta, c=self.C, y=self.y,
-                                 eigenvaluesOld=self.old_eigenvalues, eigenvectors=self.eigenvectors, np=np)
+                                 eigenvaluesOld=self.old_eigenvalues, eigenvectors=self.eigenvectors, np=np, max_iterations = self.max_iter)
 
 
         self.alphas = alphas

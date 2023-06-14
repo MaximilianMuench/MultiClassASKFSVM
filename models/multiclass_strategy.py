@@ -1,5 +1,8 @@
 from collections import Counter
 import numpy as np
+from models.askfsvm_binary import ASKFSVMBinary
+import ray
+from timeit import default_timer as timer
 
 class OneVsOneClassifier:
     def __init__(self, BinaryModelClass, **kwargs):
@@ -61,22 +64,65 @@ class OneVsOneClassifier:
 #             predictions.append(pred_label)
 #         return np.array(predictions)
 
+# inline definition for now
+
+@ray.remote
+def fit_(K, y, idx, i, max_iter, subsample_size):
+    y_binary = np.where(y == i, 1, -1)
+    model = ASKFSVMBinary(max_iter=max_iter, subsample_size=subsample_size)
+    model.fit(K, y_binary)
+    return i, idx, model
+
+
 class OneVsRestClassifier:
-    def __init__(self, BinaryModelClass, **kwargs):
-        self.BinaryModelClass = BinaryModelClass
+    def __init__(self, **kwargs):
         self.models = {}
         self.class_map = {}
         self.kwargs = kwargs
+        self.max_iter = kwargs['max_iter']
+        self.subsample_size = kwargs['subsample_size']
+        self.mp = True if "mp" in kwargs.keys() and kwargs['mp'] else False
+        self.classes = None
 
-
-    def fit(self, K, y):
-        self.classes = np.unique(y)
+    def fit_single(self, K, y):
         for idx, i in enumerate(self.classes):
             y_binary = np.where(y == i, 1, -1)
-            model = self.BinaryModelClass()  # create a new instance for each class
+            model = ASKFSVMBinary(max_iter=self.max_iter, subsample_size=self.subsample_size)
             model.fit(K, y_binary)
             self.models[i] = model
             self.class_map[idx + 1] = i  # 1 maps to first class, -1 maps to rest
+
+    def fit_multi(self, K, y):
+        # init ray
+        ray.init()
+        # push K to shared object storage
+        data_id = ray.put(K)
+
+        rays = list()
+        for idx, i in enumerate(self.classes):
+            rays.append(fit_.remote(data_id, y, idx, i, self.max_iter, self.subsample_size))
+        # wait until all ray jobs finished
+        res = ray.get(rays)
+
+        # fill the class variables
+        for entry in res:
+            self.models[entry[0]] = entry[2]
+            self.class_map[entry[1] + 1] = i  # 1 maps to first class, -1 maps to rest
+
+        # shutdown ray
+        ray.shutdown()
+
+    def fit(self, K, y):
+        start = timer()
+        self.classes = np.unique(y)
+        if self.mp:
+            self.fit_multi(K, y)
+        else:
+            self.fit_single(K, y)
+        stop = timer()
+        diff = stop - start
+        print("OneVsRestClassifier fit took " + str(diff))
+
 
     def predict(self, K):
         predictions = []

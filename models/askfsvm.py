@@ -1,7 +1,7 @@
 import numpy as np
 from models.askfsvm_binary import ASKFSVMBinary
 from models.multiclass_strategy import OneVsRestClassifier
-from models.multiclass_strategy import OneVsOneClassifier
+from timeit import default_timer as timer
 
 class ASKFSVM:
     def __init__(self, strategy='one_vs_one', **kwargs):
@@ -11,14 +11,13 @@ class ASKFSVM:
         self.kwargs = kwargs
         self.classifier = None
 
-    def fit(self, Ks, y):
-        self.y = self._convert_labels(y)
+    # def fit(self, Ks, y):
+    #     self.y = self._convert_labels(y)
 
     def fit(self, K, y):
         self.classes = np.unique(y)
-
         if len(self.classes) > 2:  # multi-class case
-            self.classifier = OneVsRestClassifier(ASKFSVMBinary, **self.kwargs)
+            self.classifier = OneVsRestClassifier(**self.kwargs)
             self.classifier.fit(K, y)
         else:  # binary classification case
             # TODO: check if y is equal to -1 and 1

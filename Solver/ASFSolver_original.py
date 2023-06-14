@@ -201,7 +201,8 @@ class GenoNLP:
         gv_ = self.np.hstack((gv_0, gv_1))
         return gv_
 
-def solve(Kold, gamma,delta, c,  y, eigenvaluesOld, eigenvectors, np):
+
+def solve(Kold, gamma,delta, c,  y, eigenvaluesOld, eigenvectors, np, max_iterations=3000):
     start = timer()
     NLP = GenoNLP(Kold, delta, c, gamma, y, eigenvaluesOld, eigenvectors, np)
     x0 = NLP.getStartingPoint()
@@ -210,7 +211,7 @@ def solve(Kold, gamma,delta, c,  y, eigenvaluesOld, eigenvectors, np):
     # These are the standard solver_binary options, they can be omitted.
     options = {'eps_pg' : 1E-4,
                'constraint_tol' : 1E-4,
-               'max_iter' : 1000,
+               'max_iter' : max_iterations,
                'm' : 10,
                'ls' : 0,
                'verbose' : 1  # Set it to 0 to fully mute it.
