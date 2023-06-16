@@ -1,8 +1,19 @@
-from collections import Counter
+import gc
+import os
 import numpy as np
-from models.askfsvm_binary import ASKFSVMBinary
 import ray
+from collections import Counter
+from joblib import Parallel, delayed, parallel_backend
+from models.askfsvm_binary import ASKFSVMBinary
+from multiprocessing import shared_memory
 from timeit import default_timer as timer
+from sys import platform
+
+if platform == "linux" or platform == "linux2":
+    os.sched_getaffinity(0)
+
+# MP_LIB = "ray"
+MP_LIB = "joblib"
 
 class OneVsOneClassifier:
     def __init__(self, BinaryModelClass, **kwargs):
@@ -67,10 +78,23 @@ class OneVsOneClassifier:
 # inline definition for now
 
 @ray.remote
-def fit_(K, y, idx, i, max_iter, subsample_size):
+def fit_remote(K, y, idx, i, max_iter, subsample_size):
     y_binary = np.where(y == i, 1, -1)
     model = ASKFSVMBinary(max_iter=max_iter, subsample_size=subsample_size)
     model.fit(K, y_binary)
+    return i, idx, model
+
+
+def fit_shared(y, idx, i, max_iter, subsample_size, sm_shape, sm_dtype):
+    y_binary = np.where(y == i, 1, -1)
+    # access shared memory instance
+    existing_shm = shared_memory.SharedMemory(name='shared_ndarray')
+    data_sm_ = np.ndarray(sm_shape, dtype=sm_dtype, buffer=existing_shm.buf)
+    # initialize model
+    model = ASKFSVMBinary(max_iter=max_iter, subsample_size=subsample_size)
+    with parallel_backend("loky", n_jobs=-1):
+        model.fit(data_sm_, y_binary)
+    existing_shm.close()
     return i, idx, model
 
 
@@ -93,24 +117,53 @@ class OneVsRestClassifier:
             self.class_map[idx + 1] = i  # 1 maps to first class, -1 maps to rest
 
     def fit_multi(self, K, y):
-        # init ray
-        ray.init()
-        # push K to shared object storage
-        data_id = ray.put(K)
+        if MP_LIB == "ray":
+            print("MP enabled using ray library")
+            # init ray
+            ray.init()
+            # cast K to 3d ndarray
+            K = np.stack(K, axis=0)
+            # push K to shared object storage
+            data_id = ray.put(K)
 
-        rays = list()
-        for idx, i in enumerate(self.classes):
-            rays.append(fit_.remote(data_id, y, idx, i, self.max_iter, self.subsample_size))
-        # wait until all ray jobs finished
-        res = ray.get(rays)
+            rays = list()
+            for idx, i in enumerate(self.classes):
+                rays.append(fit_remote.remote(data_id, y, idx, i, self.max_iter, self.subsample_size))
+            # wait until all ray jobs finished
+            res = ray.get(rays)
 
-        # fill the class variables
-        for entry in res:
-            self.models[entry[0]] = entry[2]
-            self.class_map[entry[1] + 1] = i  # 1 maps to first class, -1 maps to rest
+            # fill the class variables
+            for entry in res:
+                self.models[entry[0]] = entry[2]
+                self.class_map[entry[1] + 1] = entry[0]  # 1 maps to first class, -1 maps to rest
 
-        # shutdown ray
-        ray.shutdown()
+            # shutdown ray
+            ray.shutdown()
+        elif MP_LIB == "joblib":
+            print("MP enabled using joblib library")
+            # cast K to 3d ndarray
+            K = np.stack(K, axis=0)
+            shape = K.shape
+            dtype = str(K.dtype)
+
+            # Write data to shared memory and clear K afterwards to free memory
+            shm = shared_memory.SharedMemory(name='shared_ndarray', create=True, size=K.nbytes)
+            data_sm = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
+            data_sm[:] = K[:]
+            del K
+            _ = gc.collect()
+
+            # start parallel jobs
+            res = Parallel(n_jobs=-1)(delayed(fit_shared)(y, idx, i, self.max_iter, self.subsample_size, shape, dtype)
+                                              for idx, i in enumerate(self.classes))
+
+            # fill the class variables
+            for entry in res:
+                self.models[entry[0]] = entry[2]
+                self.class_map[entry[1] + 1] = entry[0]  # 1 maps to first class, -1 maps to rest
+
+            shm.close()
+            shm.unlink()
 
     def fit(self, K, y):
         start = timer()

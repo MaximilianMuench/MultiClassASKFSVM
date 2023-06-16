@@ -43,7 +43,7 @@ def main():
     K_test = [K0_test, K1_test, K2_test, K3_test]
 
     # Initialize the SVM with maximum iterations and subsample size
-    svm = ASKFSVM(max_iter=2000, subsample_size=0.2, mp=True)
+    svm = ASKFSVM(max_iter=2000, subsample_size=0.6, mp=True)
 
     # Train the SVM
     svm.fit(K_train, y_train)
